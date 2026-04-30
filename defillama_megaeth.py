@@ -129,14 +129,17 @@ def usdm_data(days: int = 90, export: bool = False):
 
     if tokens_total:
         recent = tokens_total[-days:]
+        def entry_supply(entry):
+            return entry.get("circulating", {}).get("peggedUSD", 0)
+
         current_entry = recent[-1]
-        current_supply = sum(current_entry.get("breakdown", {}).values())
+        current_supply = entry_supply(current_entry)
 
         prev_7d_entry  = recent[-8] if len(recent) >= 8 else recent[0]
-        prev_7d_supply = sum(prev_7d_entry.get("breakdown", {}).values())
+        prev_7d_supply = entry_supply(prev_7d_entry)
 
         prev_30d_entry  = recent[-31] if len(recent) >= 31 else recent[0]
-        prev_30d_supply = sum(prev_30d_entry.get("breakdown", {}).values())
+        prev_30d_supply = entry_supply(prev_30d_entry)
 
         print(f"\nSupply actual:  {fmt_usd(current_supply)}")
         print(f"Cambio 7d:      {((current_supply/prev_7d_supply)-1)*100:+.1f}%" if prev_7d_supply else "N/A")
@@ -161,7 +164,7 @@ def usdm_data(days: int = 90, export: bool = False):
         print(f"{'Fecha':<12} {'Supply':>14}")
         print(f"{'─'*12} {'─'*14}")
         for entry in recent[-14:]:
-            supply = sum(entry.get("breakdown", {}).values())
+            supply = entry_supply(entry)
             print(f"{ts_to_date(entry['date']):<12} {fmt_usd(supply):>14}")
 
         if export:
@@ -170,7 +173,7 @@ def usdm_data(days: int = 90, export: bool = False):
                 w = csv.writer(f)
                 w.writerow(["date", "supply_usd"])
                 for entry in tokens_total:
-                    supply = sum(entry.get("breakdown", {}).values())
+                    supply = entry_supply(entry)
                     w.writerow([ts_to_date(entry["date"]), supply])
             print("\n→ Exportado: usdm_supply.csv")
 
@@ -179,7 +182,8 @@ def usdm_data(days: int = 90, export: bool = False):
     if current_chains:
         print(f"{'Chain':<20} {'Supply':>14}")
         print(f"{'─'*20} {'─'*14}")
-        for chain, amount in sorted(current_chains.items(), key=lambda x: -x[1]):
+        for chain, val in sorted(current_chains.items(), key=lambda x: -(x[1].get("peggedUSD", 0) if isinstance(x[1], dict) else x[1])):
+            amount = val.get("peggedUSD", 0) if isinstance(val, dict) else val
             print(f"{chain:<20} {fmt_usd(amount):>14}")
 
     return detail

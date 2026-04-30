@@ -308,12 +308,130 @@ def dex_volumes_megaeth():
     if total24h:
         print(f"\nTotal DEX volume 24h en MegaETH: {fmt_usd(total24h)}")
 
+# ── Markdown export ──────────────────────────────────────────────────────────
+
+def generate_md(days: int = 90) -> str:
+    lines = []
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    lines.append(f"# MegaETH — DefiLlama Dashboard")
+    lines.append(f"\n> Generado: {now}\n")
+
+    # TVL
+    lines.append("## Chain TVL")
+    tvl_data = get(f"{TVL_BASE}/v2/historicalChainTvl/MegaETH")
+    if tvl_data:
+        recent = tvl_data[-days:]
+        cur = recent[-1]
+        p7  = recent[-8]  if len(recent) >= 8  else recent[0]
+        p30 = recent[-31] if len(recent) >= 31 else recent[0]
+        lines.append(f"\n| Métrica | Valor |")
+        lines.append(f"|---------|-------|")
+        lines.append(f"| TVL actual | **{fmt_usd(cur['tvl'])}** |")
+        lines.append(f"| Cambio 7d | {((cur['tvl']/p7['tvl'])-1)*100:+.1f}% |")
+        lines.append(f"| Cambio 30d | {((cur['tvl']/p30['tvl'])-1)*100:+.1f}% |")
+        lines.append(f"| Fecha | {ts_to_date(cur['date'])} |")
+        lines.append(f"\n### Últimos 14 días\n")
+        lines.append("| Fecha | TVL |")
+        lines.append("|-------|-----|")
+        for d in recent[-14:]:
+            lines.append(f"| {ts_to_date(d['date'])} | {fmt_usd(d['tvl'])} |")
+
+    # USDM
+    lines.append("\n## USDM (MegaUSD) — Supply")
+    all_stables = get(f"{STABLES_BASE}/stablecoins")
+    usdm = None
+    for p in all_stables.get("peggedAssets", []):
+        if "megausd" in p.get("name","").lower() or ("usdm" in p.get("symbol","").lower() and "mega" in p.get("name","").lower()):
+            usdm = p; break
+    if not usdm:
+        for p in all_stables.get("peggedAssets", []):
+            if "mega" in p.get("name","").lower():
+                usdm = p; break
+
+    if usdm:
+        detail = get(f"{STABLES_BASE}/stablecoin/{usdm['id']}")
+        tokens_total = detail.get("tokens", [])
+        def entry_supply(e): return e.get("circulating", {}).get("peggedUSD", 0)
+        if tokens_total:
+            recent = tokens_total[-days:]
+            cur_s   = entry_supply(recent[-1])
+            p7_s    = entry_supply(recent[-8]  if len(recent) >= 8  else recent[0])
+            p30_s   = entry_supply(recent[-31] if len(recent) >= 31 else recent[0])
+            kpi = 500_000_000
+            pct = cur_s / kpi * 100
+            bar = "█" * int(pct/5) + "░" * (20 - int(pct/5))
+            lines.append(f"\n| Métrica | Valor |")
+            lines.append(f"|---------|-------|")
+            lines.append(f"| Supply actual | **{fmt_usd(cur_s)}** |")
+            lines.append(f"| Cambio 7d | {((cur_s/p7_s)-1)*100:+.1f}% |" if p7_s else "| Cambio 7d | N/A |")
+            lines.append(f"| Cambio 30d | {((cur_s/p30_s)-1)*100:+.1f}% |" if p30_s else "| Cambio 30d | N/A |")
+            lines.append(f"| KPI-1 progreso | [{bar}] {pct:.1f}% de {fmt_usd(kpi)} |")
+
+            lines.append(f"\n### Revenue estimado para buybacks MEGA\n")
+            lines.append("| Yield | Anual | Diario |")
+            lines.append("|-------|-------|--------|")
+            for y in [3.5, 3.75, 4.0, 4.5]:
+                lines.append(f"| {y:.2f}% | {fmt_usd(cur_s*y/100)} | {fmt_usd(cur_s*y/100/365)} |")
+
+            lines.append(f"\n### Supply últimos 14 días\n")
+            lines.append("| Fecha | Supply |")
+            lines.append("|-------|--------|")
+            for e in recent[-14:]:
+                lines.append(f"| {ts_to_date(e['date'])} | {fmt_usd(entry_supply(e))} |")
+
+        current_chains = detail.get("currentChainBalances", {})
+        if current_chains:
+            lines.append(f"\n### Distribución por chain\n")
+            lines.append("| Chain | Supply |")
+            lines.append("|-------|--------|")
+            for chain, val in sorted(current_chains.items(), key=lambda x: -(x[1].get("peggedUSD",0) if isinstance(x[1],dict) else x[1])):
+                amount = val.get("peggedUSD",0) if isinstance(val,dict) else val
+                lines.append(f"| {chain} | {fmt_usd(amount)} |")
+
+    # Protocols
+    lines.append("\n## Protocolos en MegaETH\n")
+    all_protocols = get(f"{TVL_BASE}/protocols")
+    mega_protocols = [p for p in all_protocols if "megaeth" in str(p.get("chains",[])).lower() or "megaeth" in str(p.get("chain","")).lower()]
+    mega_protocols.sort(key=lambda p: p.get("tvl",0), reverse=True)
+    lines.append("| Protocolo | TVL | Categoría | Change 7d |")
+    lines.append("|-----------|-----|-----------|-----------|")
+    for p in mega_protocols:
+        ch7d = p.get("change_7d")
+        ch_str = f"{ch7d:+.1f}%" if ch7d is not None else "—"
+        lines.append(f"| {p.get('name','?')} | {fmt_usd(p.get('tvl',0))} | {p.get('category','?')} | {ch_str} |")
+
+    # Fees
+    lines.append("\n## Fees & Revenue en MegaETH\n")
+    fees_data = get(f"{TVL_BASE}/overview/fees/MegaETH", params={"excludeTotalDataChart": "true"})
+    protocols_fees = sorted(fees_data.get("protocols", []), key=lambda p: p.get("total24h",0) or 0, reverse=True)
+    lines.append("| Protocolo | Fees 24h | Fees 7d | Rev 24h |")
+    lines.append("|-----------|----------|---------|---------|")
+    for p in protocols_fees[:20]:
+        lines.append(f"| {p.get('name','?')} | {fmt_usd(p.get('total24h') or 0)} | {fmt_usd(p.get('total7d') or 0)} | {fmt_usd(p.get('totalRevenue24h') or 0)} |")
+    for k in ["total24h","total7d","total30d"]:
+        v = fees_data.get(k)
+        if v: lines.append(f"\n**Fees {k.replace('total','')}:** {fmt_usd(v)}")
+
+    # DEX
+    lines.append("\n## DEX Volumes en MegaETH\n")
+    dex_data = get(f"{TVL_BASE}/overview/dexs/MegaETH", params={"excludeTotalDataChart": "true"})
+    protocols_dex = sorted(dex_data.get("protocols", []), key=lambda p: p.get("total24h",0) or 0, reverse=True)
+    lines.append("| DEX | Vol 24h | Vol 7d | Vol 30d |")
+    lines.append("|-----|---------|--------|---------|")
+    for p in protocols_dex[:15]:
+        lines.append(f"| {p.get('name','?')} | {fmt_usd(p.get('total24h') or 0)} | {fmt_usd(p.get('total7d') or 0)} | {fmt_usd(p.get('total30d') or 0)} |")
+    if dex_data.get("total24h"):
+        lines.append(f"\n**Total DEX volume 24h:** {fmt_usd(dex_data['total24h'])}")
+
+    return "\n".join(lines)
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="DefiLlama API — MegaETH & USDM")
     parser.add_argument("--days",   type=int,  default=90,    help="Días de histórico (default: 90)")
     parser.add_argument("--export", action="store_true",      help="Exportar datos a CSV")
+    parser.add_argument("--md",     action="store_true",      help="Exportar reporte a Markdown")
     parser.add_argument("--all",    action="store_true",      help="Todos los endpoints")
     parser.add_argument(
         "--section",
@@ -321,6 +439,15 @@ def main():
         help="Correr solo una sección específica"
     )
     args = parser.parse_args()
+
+    if args.md:
+        print("Generando reporte markdown...")
+        md = generate_md(days=args.days)
+        filename = f"megaeth_report_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
+        with open(filename, "w") as f:
+            f.write(md)
+        print(f"→ Exportado: {filename}")
+        return
 
     print("=" * 60)
     print("  DefiLlama API — MegaETH Dashboard")
